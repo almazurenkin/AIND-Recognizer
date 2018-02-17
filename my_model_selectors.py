@@ -62,11 +62,12 @@ class SelectorConstant(ModelSelector):
 
 
 class SelectorBIC(ModelSelector):
-    """ select the model with the lowest Bayesian Information Criterion(BIC) score
+    ''' select the model with the lowest Bayesian Information Criterion(BIC) score
 
     http://www2.imm.dtu.dk/courses/02433/doc/ch6_slides.pdf
-    Bayesian information criteria: BIC = -2 * logL + p * logN
-    """
+
+    BIC = -2 * logL + p * logN
+    '''
 
     def select(self):
         """ select the best model for self.this_word based on
@@ -75,9 +76,28 @@ class SelectorBIC(ModelSelector):
         :return: GaussianHMM object
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
+        
+        best = (None, float('inf')) # Tuple (model, BIC score)
 
-        # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        for n in range(self.min_n_components, self.max_n_components):
+            try:
+                # Train HMM
+                model = GaussianHMM(n_components=n, n_iter=1000,
+                                    random_state=self.random_state).fit(self.X, self.lengths)
+    
+                logL = model.score(self.X, self.lengths)
+                logN = np.log(len((self.lengths))) # N is number of data points
+                p = n ** 2 + 2 * n * model.n_features - 1 # p is number of parameters
+    
+                # Calculate BIC (Bayesian Information Criteria) score      
+                score = -2 * logL + p * logN
+                # If BIC score is better than previous best, store model and the score
+                if score < best[1]:
+                    best = model, score
+            except:
+               pass
+           
+        return best[0]
 
 
 class SelectorDIC(ModelSelector):
@@ -87,23 +107,81 @@ class SelectorDIC(ModelSelector):
     Document Analysis and Recognition, 2003. Proceedings. Seventh International Conference on. IEEE, 2003.
     http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.58.6208&rep=rep1&type=pdf
     https://pdfs.semanticscholar.org/ed3d/7c4a5f607201f3848d4c02dd9ba17c791fc2.pdf
+
     DIC = log(P(X(i)) - 1/(M-1)SUM(log(P(X(all but i))
     '''
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        best = (None, float('-inf')) # Tuple (model, DIC score)
 
+        for n in range(self.min_n_components, self.max_n_components):
+            try:
+                # Train HMM
+                model = GaussianHMM(n_components=n, n_iter=1000,
+                                    random_state=self.random_state).fit(self.X, self.lengths)
+    
+                M = len((self.words).keys()) # Number of words
+                logL = model.score(self.X, self.lengths)
+                
+                # REMINDER: X is a numpy array of feature lists; lengths is
+                # a list of lengths of sequences within X; should always have only one item in lengths
+                log_sum = 0
+                for word in self.words.keys():
+                    X, lengths = self.hwords[word]
+                    log_sum += model.score(X, lengths)
+                                   
+                # Calculate DIC (Discriminative Information Criterion) score      
+                score = logL - (1 / (M - 1)) * (log_sum - logL)
+                # If DIC score is better than previous best, store model and the score
+                if score > best[1]:
+                    best = model, score
+            except:
+               pass
+           
+        return best[0]
 
 class SelectorCV(ModelSelector):
-    ''' select best model based on average log Likelihood of cross-validation folds
-
+    ''' select best model based on average Log Likelihood of cross-validation folds
     '''
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection using CV
-        raise NotImplementedError
+        best = (None, float('-inf')) # Tuple (model, score)
+
+        k_fold = KFold() # 3 folds by default
+
+        # Fit series of HMM with n hidden states in a range from min_n_components to max_n_components
+        for n in range(self.min_n_components, self.max_n_components):
+            
+            scores = []        
+            
+            if len(self.sequences) > 2: # Check if available samples is sufficient for 3-fold cross-validation
+                for indexes in k_fold.split(self.sequences): # For each fold
+                    # Re-combining sequences split
+                    training_values, training_lengths = combine_sequences(indexes[0], self.sequences)
+                    testing_values, testing_lengths = combine_sequences(indexes[1], self.sequences)
+
+                    try:
+                        # Training HMM
+                        model = GaussianHMM(n_components=n, n_iter=1000,
+                                            random_state=self.random_state).fit(training_values, training_lengths)
+                        # Testing HMM, storing Log Likelihood score to the list             
+                        scores.append(model.score(testing_values, testing_lengths))
+                    except:
+                        pass
+            else: # Skip doing k-folds CV
+                try: # X3 ;)
+                    model = GaussianHMM(n_components=n, n_iter=1000,
+                                        random_state=self.random_state).fit(self.X, self.lengths)
+                    scores.append(model.score(self.X, self.lengths))
+                except:
+                    pass
+            
+            if scores:
+                if np.mean(scores) > best[1]:
+                    best = model, np.mean(scores)
+           
+        return best[0]
